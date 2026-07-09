@@ -3,7 +3,7 @@
 import html as _html
 
 from .platforms import all_events
-from .rules import SEVERITY_LABEL, score_label, attribution_audit
+from .rules import SEVERITY_LABEL, score_label, attribution_audit, build_action_plan
 from .quality import build_inventory, essential_coverage
 
 SEV_COLOR = {"critico": "#c62828", "alto": "#e65100", "medio": "#b8860b",
@@ -55,6 +55,27 @@ def build_html_report(url, res):
         parts.append(f"<div class='sub'>CMP detectado: {_e(', '.join(cmp_info['cmps']))}"
                      + (" · banner aceptado durante el escaneo" if scan.get("consent_click") else "")
                      + "</div>")
+
+    # Conclusión y plan de acción
+    plan = build_action_plan(issues, score)
+    nivel_color = {"ok": "#2e7d32", "mejorable": "#1565c0",
+                   "grave": "#e65100", "critico": "#c62828"}[plan["nivel"]]
+    parts.append("<h2>🩺 Conclusión</h2>")
+    parts.append(f"<div class='issue' style='border-left-color:{nivel_color}'>"
+                 f"<p>{_e(plan['veredicto'])}</p></div>")
+    if plan["bloques"]:
+        parts.append("<h2>🗺️ Plan de acción priorizado</h2>")
+        paso = 0
+        for bloque in plan["bloques"]:
+            parts.append(f"<h3>{_e(bloque['titulo'])}</h3>")
+            for item in bloque["items"]:
+                paso += 1
+                parts.append(f"<p><strong>{paso}. {_e(item['titulo'])}</strong> — "
+                             f"<em>responsable: {_e(item['owner'])}</em></p><ol>")
+                for s in item["pasos"]:
+                    parts.append(f"<li>{_e(s)}</li>")
+                parts.append("</ol>")
+        parts.append(f"<p><em>{_e(plan['cierre'])}</em></p>")
 
     # Plataformas
     parts.append("<h2>Plataformas detectadas</h2>")

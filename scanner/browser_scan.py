@@ -57,25 +57,40 @@ CONSENT_SELECTORS = [
 
 CONSENT_TEXT_RE = r"(?i)^(aceptar( todo| todas)?( las cookies)?|accept( all)?( cookies)?|permitir todas|agree|estoy de acuerdo|entendido|allow all|acepto)$"
 
-# Parámetros de campaña simulados (--attribution): permiten verificar que los
-# click-IDs sobreviven a redirecciones, se guardan en cookies y llegan en los hits.
-ATTRIBUTION_PARAMS = {
-    "utm_source": "pixel-doctor",
-    "utm_medium": "auditoria",
-    "utm_campaign": "test-medicion",
-    "gclid": "PXDOCTESTGCLID123",
-    "fbclid": "PXDOCTESTFBCLID123",
-    "msclkid": "pxdoctestmsclkid123",
-    "ttclid": "pxdoctestttclid123",
+# Simulación de llegada de campaña (--attribution): por plataforma, con el
+# click-ID y las UTM que esa plataforma usaría de verdad. Permite verificar que
+# los click-IDs sobreviven a redirecciones, generan su cookie y llegan en los hits.
+ATTRIBUTION_SETS = {
+    "google": {"gclid": "PXDOCTESTGCLID123",
+               "utm_source": "google", "utm_medium": "cpc"},
+    "meta": {"fbclid": "PXDOCTESTFBCLID123",
+             "utm_source": "facebook", "utm_medium": "paid_social"},
+    "linkedin": {"li_fat_id": "pxdoctest-lifatid-123",
+                 "utm_source": "linkedin", "utm_medium": "paid_social"},
+    "tiktok": {"ttclid": "pxdoctestttclid123",
+               "utm_source": "tiktok", "utm_medium": "paid_social"},
+    "bing": {"msclkid": "pxdoctestmsclkid123",
+             "utm_source": "bing", "utm_medium": "cpc"},
 }
 
 
-def add_attribution_params(url):
-    """Añade a la URL los parámetros de campaña que no estén ya presentes."""
+def add_attribution_params(url, platforms):
+    """Añade a la URL los parámetros de campaña simulados de las plataformas
+    elegidas (sin pisar los que ya traiga la URL)."""
     from urllib.parse import urlparse, parse_qsl, urlencode, urlunparse
+    keys = [k for k in platforms if k in ATTRIBUTION_SETS]
+    add = {"utm_campaign": "test-medicion"}
+    for k in keys:
+        add.update({kk: vv for kk, vv in ATTRIBUTION_SETS[k].items()
+                    if not kk.startswith("utm_")})
+    if len(keys) == 1:  # una sola plataforma: UTMs realistas de esa fuente
+        add.update({kk: vv for kk, vv in ATTRIBUTION_SETS[keys[0]].items()
+                    if kk.startswith("utm_")})
+    else:
+        add.update({"utm_source": "pixel-doctor", "utm_medium": "auditoria"})
     parts = urlparse(url)
     q = dict(parse_qsl(parts.query, keep_blank_values=True))
-    for k, v in ATTRIBUTION_PARAMS.items():
+    for k, v in add.items():
         q.setdefault(k, v)
     return urlunparse(parts._replace(query=urlencode(q)))
 
@@ -440,9 +455,9 @@ def main():
     ap.add_argument("--consent", action="store_true", help="aceptar el banner de cookies")
     ap.add_argument("--interact", action="store_true", help="hacer scroll para disparar tags de scroll")
     ap.add_argument("--mobile", action="store_true", help="emular móvil")
-    ap.add_argument("--attribution", action="store_true",
-                    help="simular llegada de campaña: añade utm_* + gclid + fbclid + "
-                         "msclkid + ttclid a la URL para auditar la atribución")
+    ap.add_argument("--attribution", nargs="?", const="all", default=None,
+                    help="simular llegada de campaña. Sin valor = todas las plataformas; "
+                         "o lista separada por comas: google,meta,linkedin,tiktok,bing")
     ap.add_argument("--submit-form", action="store_true",
                     help="prueba de lead: rellenar y ENVIAR el formulario (crea un lead real)")
     ap.add_argument("--test-email", default="test@ejemplo.com")
@@ -455,8 +470,10 @@ def main():
     if not re.match(r"^https?://", url):
         url = "https://" + url
     if args.attribution:
-        url = add_attribution_params(url)
-        log(f"[info] URL con parámetros de campaña: {url}")
+        platforms = (list(ATTRIBUTION_SETS) if args.attribution == "all"
+                     else [p.strip().lower() for p in args.attribution.split(",")])
+        url = add_attribution_params(url, platforms)
+        log(f"[info] URL con parámetros de campaña ({', '.join(platforms)}): {url}")
 
     data = scan(url, wait_ms=args.wait, consent=args.consent,
                 interact=args.interact, mobile=args.mobile,

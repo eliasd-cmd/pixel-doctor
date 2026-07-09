@@ -22,7 +22,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from scanner.platforms import detect_all, all_events, tracking_failures, CORE_PLATFORMS
 from scanner.rules import run_rules, health_score, score_label, SEVERITY_LABEL
 from scanner.report_html import build_html_report
-from scanner.rules import attribution_audit
+from scanner.rules import attribution_audit, build_action_plan
 from scanner.quality import build_inventory, essential_coverage, naming_findings, pii_scan
 
 APP_DIR = Path(__file__).parent
@@ -56,7 +56,7 @@ PLATFORM_ICONS = {
 
 # ------------------------------------------------------------- escaneo ----
 
-def run_scan(url, consent, interact, mobile, wait_s, lead_opts=None, attribution=False):
+def run_scan(url, consent, interact, mobile, wait_s, lead_opts=None, attribution=None):
     cmd = [sys.executable, "-m", "scanner.browser_scan", url,
            "--wait", str(int(wait_s * 1000)), "--json", "-"]
     if consent:
@@ -66,7 +66,7 @@ def run_scan(url, consent, interact, mobile, wait_s, lead_opts=None, attribution
     if mobile:
         cmd.append("--mobile")
     if attribution:
-        cmd.append("--attribution")
+        cmd += ["--attribution", ",".join(attribution)]
     if lead_opts:
         cmd += ["--submit-form",
                 "--test-email", lead_opts["email"],
@@ -114,6 +114,18 @@ def build_markdown_report(url, res):
             lines.append(f"- **{d['name']}** — IDs: {', '.join(d['ids']) or '—'} · "
                          f"librería: {'✅' if d['library_loaded'] else '❌'} · "
                          f"eventos enviados: {len(d['events'])}")
+    plan = build_action_plan(issues, res["score"])
+    lines.append("## Conclusión\n")
+    lines.append(plan["veredicto"] + "\n")
+    if plan["bloques"]:
+        lines.append("## Plan de acción priorizado\n")
+        paso = 0
+        for bloque in plan["bloques"]:
+            lines.append(f"**{bloque['titulo']}**\n")
+            for item in bloque["items"]:
+                paso += 1
+                lines.append(f"{paso}. **{item['titulo']}** — responsable: {item['owner']}")
+        lines.append("\n" + plan["cierre"] + "\n")
     lines.append("\n## Problemas y soluciones\n")
     if not issues:
         lines.append("Sin problemas detectados. ✅")
@@ -163,9 +175,19 @@ with st.sidebar:
                        help="Tiempo para que disparen los tags lentos.")
     attribution = st.toggle(
         "🎯 Simular llegada de campaña", value=False,
-        help="Añade utm_* + gclid + fbclid + msclkid + ttclid de prueba a la URL y "
-             "comprueba que cada click-ID sobrevive a redirecciones, genera su cookie "
-             "(_gcl_aw, _fbc, _fbp…) y se envía en los hits a su plataforma.")
+        help="Añade a la URL los parámetros que pondría la plataforma elegida "
+             "(UTMs + click-ID) y comprueba que sobreviven a redirecciones, generan "
+             "su cookie (_gcl_aw, _fbc, li_fat_id…) y se envían en los hits.")
+    attr_platforms = []
+    if attribution:
+        SIM_OPTIONS = {"Google Ads (gclid)": "google", "Meta (fbclid)": "meta",
+                       "LinkedIn (li_fat_id)": "linkedin", "TikTok (ttclid)": "tiktok",
+                       "Microsoft/Bing (msclkid)": "bing"}
+        sel = st.multiselect("Plataformas a simular", list(SIM_OPTIONS),
+                             default=list(SIM_OPTIONS),
+                             help="Elige una para simular esa campaña con sus UTMs "
+                                  "reales (p. ej. google/cpc), o varias a la vez.")
+        attr_platforms = [SIM_OPTIONS[s] for s in sel]
     st.divider()
     st.subheader("🧪 Prueba de lead")
     do_lead = st.toggle("Rellenar y ENVIAR el formulario", value=False,
@@ -201,7 +223,8 @@ if go:
             u = url if url.startswith("http") else "https://" + url
             with st.spinner(f"Escaneando {u} … (30-90 s)"):
                 try:
-                    scan = run_scan(u, consent, interact, mobile, wait_s, lead_opts, attribution)
+                    scan = run_scan(u, consent, interact, mobile, wait_s, lead_opts,
+                                    attr_platforms if attribution else None)
                     st.session_state.results[u] = analyze(scan)
                 except Exception as e:
                     st.session_state.results[u] = {"error": str(e)}
@@ -291,6 +314,22 @@ for tab, (url, res) in zip(tabs_urls, results.items()):
 
         # ------- problemas
         with t1:
+            plan = build_action_plan(issues, score)
+            st.subheader("🩺 Conclusión")
+            {"ok": st.success, "mejorable": st.info,
+             "grave": st.warning, "critico": st.error}[plan["nivel"]](plan["veredicto"])
+            if plan["bloques"]:
+                st.subheader("🗺️ Plan de acción priorizado")
+                paso = 0
+                for bloque in plan["bloques"]:
+                    st.markdown(f"**{bloque['titulo']}**")
+                    for item in bloque["items"]:
+                        paso += 1
+                        st.markdown(f"{paso}. **{item['titulo']}** · _responsable: "
+                                    f"{item['owner']}_")
+                st.caption(plan["cierre"] + " El detalle de cada punto, con su paso "
+                           "a paso completo, está en las fichas de abajo. ⬇️")
+                st.divider()
             if not issues:
                 st.success("No se detectó ningún problema. La medición se ve sana. 🎉")
             for iss in issues:

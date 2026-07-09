@@ -235,8 +235,12 @@ def pii_scan(scan):
 
 def utm_lint(scan):
     q = dict(parse_qsl(urlparse(scan.get("url", "")).query, keep_blank_values=True))
+    # Si la URL lleva la campaña simulada por la propia app, sus utm_source/
+    # medium/campaign son nuestros: se excluyen del lint (el resto se audita).
+    simulated_run = q.get("utm_campaign") == "test-medicion"
     utms = {k: v for k, v in q.items()
-            if k.startswith("utm_") and v not in SIMULATED_VALUES}
+            if k.startswith("utm_") and v not in SIMULATED_VALUES
+            and not (simulated_run and k in ("utm_source", "utm_medium", "utm_campaign"))}
     findings = []
     for k, v in utms.items():
         problems = []

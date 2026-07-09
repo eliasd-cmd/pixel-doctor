@@ -638,6 +638,11 @@ def attribution_audit(scan, det):
             row["en_hits"] = any(v in e["url"] or v in str(e["params"])
                                  for e in det["tiktok"]["events"])
             row["hits_de"] = "TikTok"
+        elif k == "li_fat_id":
+            row["cookie"] = "li_fat_id"
+            row["cookie_ok"] = bool("li_fat_id" in cookies and v in cookies["li_fat_id"])
+            row["en_hits"] = any(v in e["url"] for e in det["linkedin"]["events"])
+            row["hits_de"] = "LinkedIn"
         elif k.startswith("utm_"):
             row["cookie"] = "(no aplica)"
             row["cookie_ok"] = None
@@ -699,6 +704,20 @@ def _attribution_rules(scan, det, issues):
                  "Verifica en DevTools → Application → Cookies: _fbc debe contener el fbclid "
                  "y debe existir _fbp.",
                  "Si usas CAPI, envía también fbc/fbp en el payload del servidor."]))
+        if k == "li_fat_id" and r["en_url_final"] and r["cookie_ok"] is False \
+                and det["linkedin"]["detected"]:
+            issues.append(issue(
+                "medio", "atribucion",
+                "El li_fat_id de LinkedIn llega pero no se guarda en su cookie",
+                "El Insight Tag debería guardar el click-ID de LinkedIn en la cookie "
+                "li_fat_id. Sin ella, las conversiones pierden la atribución al clic "
+                "del anuncio.",
+                ["Comprueba que el Insight Tag carga y envía datos en esta página "
+                 "(pestaña Plataformas).",
+                 "Consentimiento: si el tag se bloquea hasta aceptar, escanea con "
+                 "'Aceptar consentimiento' y compara.",
+                 "Verifica en DevTools → Application → Cookies que li_fat_id existe "
+                 "tras llegar con el parámetro en la URL."]))
         if k == "fbclid" and det["meta"]["events"] and r["en_hits"] is False and r["cookie_ok"]:
             issues.append(issue(
                 "medio", "atribucion",
@@ -735,6 +754,80 @@ def _attribution_rules(scan, det, issues):
              "Dispara la etiqueta GA4 en 'Initialization' (antes de que la SPA reescriba "
              "la URL), o conserva el query string en el historial (history.replaceState).",
              "Verifica en GA4 Tiempo real → usuario → fuente/medio de la sesión."]))
+
+
+# ---------------------------------------------- Conclusión y plan de acción
+
+def _issue_owner(iss):
+    """Quién debería aplicar el arreglo, según el tipo de problema."""
+    text = (iss["title"] + " " + iss["description"] + " " +
+            " ".join(iss["fix_steps"])).lower()
+    dev_signals = ("csp", "redirección", "redirige", "servidor", "código fuente",
+                   "history.replacestate", "errores javascript", "http", "snippet",
+                   "datalayer.push", "<head>", "redeploy")
+    gtm_signals = ("gtm", "etiqueta", "activador", "contenedor", "consent mode",
+                   "cmp", "conversion linker", "tagmanager", "vista previa",
+                   "events manager", "campaign manager", "ads manager")
+    is_dev = any(s in text for s in dev_signals)
+    is_gtm = any(s in text for s in gtm_signals)
+    if is_dev and is_gtm:
+        return "Marketing + Desarrollador"
+    if is_dev:
+        return "Desarrollador web"
+    return "Marketing (GTM/plataformas)"
+
+
+def build_action_plan(issues, score):
+    """Conclusión ejecutiva + plan de acción priorizado a partir de los problemas."""
+    reales = [i for i in issues if i["severity"] != "info"]
+    n_crit = sum(1 for i in reales if i["severity"] == "critico")
+    n_alto = sum(1 for i in reales if i["severity"] == "alto")
+    n_medio = sum(1 for i in reales if i["severity"] == "medio")
+
+    # Veredicto
+    if not reales:
+        veredicto = ("La medición de esta página está sana: las plataformas cargan, "
+                     "los eventos se envían y no se detectó ningún problema que "
+                     "requiera acción. Solo hay observaciones informativas.")
+        nivel = "ok"
+    else:
+        peor = reales[0]  # ya vienen ordenados por severidad
+        if n_crit:
+            veredicto = (f"La medición tiene {n_crit} problema(s) CRÍTICO(S) que la "
+                         f"dejan inservible en parte o del todo. El más grave: "
+                         f"«{peor['title']}». Hasta corregirlo, los datos de esta "
+                         "página no son fiables y las campañas no pueden optimizar.")
+            nivel = "critico"
+        elif n_alto:
+            veredicto = (f"La base de medición funciona, pero hay {n_alto} problema(s) "
+                         f"grave(s) que están dañando la calidad del dato — el principal: "
+                         f"«{peor['title']}». Conviene corregirlos esta semana; cada día "
+                         "que pasan activos se pierden conversiones o se ensucian métricas.")
+            nivel = "grave"
+        else:
+            veredicto = (f"La medición funciona correctamente en lo esencial. Hay "
+                         f"{len(reales)} ajuste(s) de calidad recomendados que "
+                         "mejorarán la fiabilidad y la atribución, sin urgencia crítica.")
+            nivel = "mejorable"
+
+    # Plan priorizado
+    bloques = []
+    grupos = [("🔥 Urgente — corta pérdida de datos", ("critico", "alto")),
+              ("⚠️ Importante — mejora la calidad del dato", ("medio",)),
+              ("✨ Recomendado — buenas prácticas", ("bajo",))]
+    for titulo, sevs in grupos:
+        items = [i for i in issues if i["severity"] in sevs]
+        if items:
+            bloques.append({"titulo": titulo, "items": [{
+                "titulo": i["title"],
+                "owner": _issue_owner(i),
+                "pasos": i["fix_steps"],
+            } for i in items]})
+
+    cierre = ("Tras aplicar cada bloque, vuelve a escanear la página para confirmar "
+              "que el problema desaparece y que no se ha roto nada más.")
+    return {"veredicto": veredicto, "nivel": nivel, "bloques": bloques,
+            "cierre": cierre}
 
 
 def health_score(issues):
