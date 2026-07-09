@@ -2,7 +2,7 @@
 
 import html as _html
 
-from .platforms import all_events
+from .platforms import all_events, conversion_events
 from .rules import SEVERITY_LABEL, score_label, attribution_audit, build_action_plan
 from .quality import build_inventory, essential_coverage
 
@@ -80,13 +80,15 @@ def build_html_report(url, res):
     # Plataformas
     parts.append("<h2>Plataformas detectadas</h2>")
     parts.append("<table><tr><th>Plataforma</th><th>IDs</th><th>Librería cargada</th>"
-                 "<th>Eventos enviados</th></tr>")
+                 "<th>Eventos enviados</th><th>Evento de lead</th></tr>")
     for d in det.values():
         if not d["detected"]:
             continue
+        lead = ("✅" if conversion_events(det, d["key"])
+                else ("❌ solo tráfico" if d["events"] else "—"))
         parts.append(f"<tr><td>{_e(d['name'])}</td><td>{_e(', '.join(d['ids']) or '—')}</td>"
                      f"<td>{'✅' if d['library_loaded'] else '❌'}</td>"
-                     f"<td>{len(d['events'])}</td></tr>")
+                     f"<td>{len(d['events'])}</td><td>{lead}</td></tr>")
     parts.append("</table>")
 
     # Plan de medición

@@ -408,6 +408,40 @@ DETECTORS = [
 # Plataformas de ads/analytics "principales" para el resumen
 CORE_PLATFORMS = ["gtm", "ga4", "gads", "meta", "linkedin", "tiktok", "bing"]
 
+# ------------------------------------------- eventos de conversión --------
+
+GA4_CONV_RE = re.compile(
+    r"generate_lead|sign_?up|purchase|form_submit|submit_form|conversion|lead|"
+    r"registro|solicitud|demo|contact", re.I)
+
+
+def is_conversion_event(platform_key, event_name):
+    """¿Este evento cuenta como conversión (lead/registro/compra) y no como
+    simple tráfico (PageView/page_view)?"""
+    n = event_name or ""
+    if platform_key == "ga4":
+        return bool(GA4_CONV_RE.search(n))
+    if platform_key == "meta":
+        return n not in ("PageView", "ViewContent", "(sin ev)")
+    if platform_key == "gads":
+        return n.startswith("conversión")
+    if platform_key == "linkedin":
+        return n == "conversión"
+    if platform_key == "tiktok":
+        return n.lower() not in ("pageview", "landingpageview", "engagedsession",
+                                 "track", "viewcontent", "browse", "sessionstart")
+    if platform_key == "bing":
+        return n not in ("pageLoad",)
+    return False
+
+
+def conversion_events(det, key, phase=None):
+    evs = [e for e in det[key]["events"]
+           if is_conversion_event(key, e["event"])]
+    if phase:
+        evs = [e for e in evs if e.get("phase") == phase]
+    return evs
+
 
 # ------------------------------------------------------------- CMP --------
 

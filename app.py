@@ -19,7 +19,8 @@ import pandas as pd
 import streamlit as st
 
 sys.path.insert(0, str(Path(__file__).parent))
-from scanner.platforms import detect_all, all_events, tracking_failures, CORE_PLATFORMS
+from scanner.platforms import (detect_all, all_events, tracking_failures,
+                               CORE_PLATFORMS, conversion_events)
 from scanner.rules import run_rules, health_score, score_label, SEVERITY_LABEL
 from scanner.report_html import build_html_report
 from scanner.rules import attribution_audit, build_action_plan
@@ -277,16 +278,20 @@ for tab, (url, res) in zip(tabs_urls, results.items()):
         for col, key in zip(cols, CORE_PLATFORMS):
             d = det[key]
             n_ev = len(d["events"])
+            n_conv = len(conversion_events(det, key))
             if not d["detected"]:
                 estado, delta = "—", "no instalado"
             elif key == "gtm":
                 # GTM es un contenedor: no envía eventos propios
                 estado = "✅ OK" if d["library_loaded"] else "🚨 No carga"
                 delta = ", ".join(d["ids"][:2]) or "—"
-            elif n_ev > 0 and not any(e["failure"] or (e["status"] or 0) >= 400 for e in d["events"]):
-                estado, delta = "✅ OK", f"{n_ev} eventos"
-            elif n_ev > 0:
+            elif n_ev > 0 and any(e["failure"] or (e["status"] or 0) >= 400 for e in d["events"]):
                 estado, delta = "⚠️ Con errores", f"{n_ev} eventos"
+            elif n_ev > 0 and n_conv > 0:
+                estado, delta = "✅ OK", f"{n_ev} eventos · lead ✓"
+            elif n_ev > 0:
+                # Envía tráfico pero ningún evento de lead/conversión
+                estado, delta = "🟡 Solo PageView", "sin evento de lead"
             else:
                 estado, delta = "🚨 Mudo", "0 eventos"
             col.metric(f"{PLATFORM_ICONS[key]} {d['name'].split(' (')[0]}", estado, delta,
@@ -493,6 +498,8 @@ for tab, (url, res) in zip(tabs_urls, results.items()):
                     "Librería cargada": "✅" if d["library_loaded"] else ("❌" if d["detected"] else "—"),
                     "En HTML": "✅" if d["in_html"] else "—",
                     "Eventos enviados": len(d["events"]),
+                    "Evento de lead": ("✅" if conversion_events(det, d["key"])
+                                       else ("❌" if d["events"] else "—")),
                 })
             st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
             gkeys = ((scan.get("js") or {}).get("globals") or {}).get("google_tag_manager")

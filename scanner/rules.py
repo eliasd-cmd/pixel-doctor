@@ -6,7 +6,7 @@ lista de problemas, cada uno con severidad, evidencia y pasos de solución.
 Severidades: critico > alto > medio > bajo > info
 """
 
-from .platforms import detect_cmp, tracking_failures
+from .platforms import detect_cmp, tracking_failures, conversion_events
 
 SEVERITY_ORDER = {"critico": 0, "alto": 1, "medio": 2, "bajo": 3, "info": 4}
 SEVERITY_WEIGHT = {"critico": 25, "alto": 15, "medio": 8, "bajo": 3, "info": 0}
@@ -262,7 +262,7 @@ def run_rules(scan, det):
                  "Si la landing pasa por redirecciones, verifica que el parámetro gclid "
                  "sobrevive hasta esta página (míralo en la URL final)."]))
         conv = [e for e in gads_evs if e["event"].startswith("conversión")]
-        if not conv:
+        if not conv and not scan.get("options", {}).get("submit_form"):
             issues.append(issue(
                 "info", "gads", "No se disparó ninguna conversión de Google Ads al cargar",
                 "Es lo esperado si la conversión se dispara en interacciones (formulario, "
@@ -553,6 +553,9 @@ def run_rules(scan, det):
                      "Revisa también que la URL de la página de gracias no lleve el email como "
                      "parámetro (?email=...), porque GA4 lo capturaría en page_location."]))
 
+    # ------------------------------- Eventos de conversión por plataforma
+    _conversion_rules(scan, det, issues)
+
     # --------------------------------------------- Atribución / click-IDs
     _attribution_rules(scan, det, issues)
 
@@ -584,6 +587,91 @@ def run_rules(scan, det):
     # Orden y deduplicación final
     issues.sort(key=lambda i: SEVERITY_ORDER.get(i["severity"], 9))
     return issues, cmp_info
+
+
+# Cómo se configura el evento de lead en cada plataforma
+CONV_FIX = {
+    "meta": ["Crea en GTM una etiqueta de Meta con `fbq('track','Lead')` (o la "
+             "plantilla oficial de Meta Pixel, evento 'Lead') con activador en el "
+             "evento de envío del formulario (form_submitted / generate_lead).",
+             "Verifica en Meta Events Manager → Probar eventos: al enviar el "
+             "formulario debe aparecer 'Lead' (no solo PageView).",
+             "Sin el evento Lead, las campañas de clientes potenciales de Meta no "
+             "pueden optimizar ni medir el coste por lead."],
+    "gads": ["Crea la acción de conversión en Google Ads (Objetivos → Conversiones "
+             "→ Nueva) y copia el ID y el label.",
+             "En GTM: etiqueta 'Conversión de Google Ads' con ese ID/label y "
+             "activador en el evento de envío del formulario + 'Conversion Linker'.",
+             "Verifica en Google Ads que la acción pasa de 'Inactiva' a registrar "
+             "conversiones (puede tardar unas horas)."],
+    "ga4": ["Añade en GTM una etiqueta 'Evento GA4' con nombre 'generate_lead' y "
+            "activador en el envío del formulario.",
+            "En GA4 → Administración → Eventos, marca 'generate_lead' como "
+            "evento clave (conversión).",
+            "Así podrás importarlo a Google Ads como conversión si lo necesitas."],
+    "linkedin": ["En LinkedIn Campaign Manager → Analizar → Seguimiento de "
+                 "conversiones → crea una conversión (tipo 'Evento específico' o "
+                 "URL de la página de gracias).",
+                 "Si es por evento: añade `window.lintrk('track', {conversion_id: XXXX})` "
+                 "vía GTM en el envío del formulario.",
+                 "Verifica en Campaign Manager que la conversión recibe señales."],
+    "tiktok": ["Añade vía GTM el evento `ttq.track('SubmitForm')` (o "
+               "'CompleteRegistration') en el envío del formulario.",
+               "Verifica en TikTok Ads Manager → Events → Web Events → Test Events."],
+    "bing": ["Crea el objetivo de conversión en Microsoft Ads (Conversiones → "
+             "Objetivos) tipo evento.",
+             "Vía GTM añade `window.uetq.push('event', 'submit_lead', {})` en el "
+             "envío del formulario, con los valores del objetivo."],
+}
+
+PLATFORM_LABEL = {"meta": "Meta", "gads": "Google Ads", "ga4": "GA4",
+                  "linkedin": "LinkedIn", "tiktok": "TikTok", "bing": "Microsoft/Bing"}
+
+
+def _conversion_rules(scan, det, issues):
+    """¿Las plataformas envían evento de LEAD/conversión, o solo PageView?"""
+    ads_keys = [k for k in ("meta", "gads", "linkedin", "tiktok", "bing", "ga4")
+                if det[k]["detected"] and det[k]["events"]]
+    if not ads_keys:
+        return
+    submitted = bool((scan.get("lead_test") or {}).get("submitted"))
+
+    if submitted:
+        # Prueba de lead hecha: verificación CONFIRMADA por plataforma.
+        dl_post = (scan.get("js") or {}).get("dataLayer") or []
+        dl_pre_len = ((scan.get("js_pre_submit") or {}).get("dataLayer_length")) or 0
+        algo_reacciono = (isinstance(dl_post, list) and len(dl_post) > dl_pre_len) or \
+            any(e.get("phase") == "post_submit" for k in det for e in det[k]["events"])
+        if not algo_reacciono:
+            return  # lo cubre ya la regla crítica de la prueba de lead
+        for k in ads_keys:
+            conv_submit = conversion_events(det, k, phase="post_submit")
+            if not conv_submit:
+                issues.append(issue(
+                    "alto", k,
+                    f"{PLATFORM_LABEL[k]} NO envió evento de lead al enviar el formulario",
+                    f"Se envió el formulario de prueba y {PLATFORM_LABEL[k]} solo "
+                    "registró tráfico (PageView), no la conversión. Las campañas de "
+                    "captación en esta plataforma no pueden optimizar ni atribuir leads.",
+                    CONV_FIX[k] + ["Repite la 🧪 Prueba de lead para confirmar que ya "
+                                   "aparece el evento en la fase 'post-envío'."]))
+    else:
+        # Sin prueba de lead: no se puede confirmar, pero sí avisar.
+        sin_conv = [k for k in ads_keys if not conversion_events(det, k)]
+        if sin_conv:
+            nombres = ", ".join(PLATFORM_LABEL[k] for k in sin_conv)
+            issues.append(issue(
+                "medio", "general",
+                f"Solo se ve PageView en: {nombres} — el evento de lead no está verificado",
+                "En esta carga, esas plataformas solo enviaron tráfico. Si esta página "
+                "tiene formulario/CTA de captación, el evento de conversión (Lead, "
+                "generate_lead, SubmitForm…) debería dispararse al enviarlo — y aquí "
+                "no hay rastro de que esté configurado.",
+                ["Lanza el escaneo con la 🧪 Prueba de lead activada: enviará el "
+                 "formulario y confirmará por plataforma si el evento de lead existe.",
+                 "Alternativa: escanea la página de gracias (si la conversión dispara allí).",
+                 "Si confirmas que falta, cada plataforma tiene su ficha de configuración "
+                 "en el informe de la prueba de lead."]))
 
 
 def attribution_audit(scan, det):
