@@ -865,38 +865,134 @@ def _issue_owner(iss):
     return "Marketing (GTM/plataformas)"
 
 
-def build_action_plan(issues, score):
+def _diagnosis_narrative(issues, det, scan, nivel):
+    """Diagnóstico en lenguaje de negocio: qué funciona, cuál es el problema
+    de fondo y qué significa para las campañas."""
+    paras = []
+    titles = " | ".join(i["title"] for i in issues)
+
+    if "No se detectó NINGÚN sistema" in titles:
+        return ["Esta página no tiene ninguna medición instalada: ni Analytics ni "
+                "píxeles publicitarios. Todo el tráfico que llega —de pago u "
+                "orgánico— se está perdiendo sin dejar rastro, y ninguna campaña "
+                "puede optimizar ni atribuir resultados. Es lo primero que hay que "
+                "resolver antes de invertir un euro más en tráfico.",
+                "Qué hacer: sigue el plan de acción de abajo. Este informe en PDF "
+                "está redactado para reenviárselo tal cual a quien gestione la web."]
+
+    ads_keys = ["meta", "gads", "linkedin", "tiktok", "bing"]
+    sending = [k for k in ads_keys + ["ga4"] if det[k]["detected"] and det[k]["events"]]
+    with_lead = [k for k in sending if conversion_events(det, k)]
+    no_lead = [k for k in sending if not conversion_events(det, k)]
+    mute = [k for k in ads_keys + ["ga4"]
+            if det[k]["detected"] and not det[k]["events"]
+            and (det[k]["library_loaded"] or det[k]["in_html"])]
+    submitted = bool((scan.get("lead_test") or {}).get("submitted"))
+
+    def nombres(keys):
+        return ", ".join(PLATFORM_LABEL.get(k, det[k]["name"]) for k in keys)
+
+    # 1) Lo que funciona
+    if sending:
+        frase = f"Lo que funciona: los píxeles de {nombres(sending)} cargan y envían datos"
+        if with_lead:
+            frase += f", y {nombres(with_lead)} mide el lead correctamente"
+        paras.append(frase + ".")
+
+    # 2) El problema de fondo (el más relevante para negocio)
+    if no_lead and not with_lead:
+        via = ("— confirmado enviando el formulario de prueba" if submitted
+               else "— en esta carga no hay rastro de que esté configurado")
+        paras.append(
+            f"El problema de fondo: ninguna plataforma tiene el evento de lead "
+            f"{via}. Solo miden visitas. Todo el presupuesto de captación que "
+            "apunte a esta página está optimizando a ciegas: las campañas no "
+            "saben qué visitas acaban en un formulario enviado, no pueden "
+            "aprender de ello ni atribuir resultados, y tú no puedes ver el "
+            "coste real por lead.")
+    elif no_lead and with_lead:
+        paras.append(
+            f"El hueco importante: {nombres(with_lead)} sí mide el lead, pero "
+            f"{nombres(no_lead)} solo {'miden' if len(no_lead) > 1 else 'mide'} "
+            "visitas. Las campañas de esas plataformas están optimizando a ciegas "
+            "mientras las demás sí aprenden — mismo presupuesto, mitad de la "
+            "inteligencia.")
+    if mute:
+        paras.append(
+            f"Además, {nombres(mute)} está instalado pero mudo (no envía ni un "
+            "hit): a efectos prácticos es como si no existiera.")
+
+    extras = []
+    if "DUPLICADO" in titles:
+        extras.append("hay eventos contándose por duplicado, así que las visitas "
+                      "están infladas y el CPA aparente es mejor que el real")
+    if "Tras ACEPTAR el consentimiento" in titles or "DENEGANDO" in titles:
+        extras.append("el banner de cookies está bloqueando la medición incluso "
+                      "de los usuarios que aceptan — se pierde dato legítimamente "
+                      "medible")
+    if "GCLID llega pero NO" in titles:
+        extras.append("los clics de Google Ads llegan pero no se guardan: aunque "
+                      "hubiera conversiones, no se atribuirían a la campaña")
+    if "redirección ELIMINA" in titles.lower() or "ELIMINA parámetros" in titles:
+        extras.append("una redirección está borrando los parámetros de campaña "
+                      "por el camino")
+    if "PII en claro" in titles:
+        extras.append("se están enviando datos personales en claro a las "
+                      "plataformas (riesgo RGPD y de que Google borre la "
+                      "propiedad de GA4)")
+    if "bloqueadas o con error" in titles:
+        extras.append("parte de los hits se bloquea antes de salir de la web")
+    if extras:
+        paras.append("También pesa en el dato: " + "; ".join(extras) + ".")
+
+    # 3) Qué hacer
+    if nivel == "ok":
+        paras.append("No hay acciones urgentes: la medición está sana. Revisa las "
+                     "observaciones informativas por si aplican a tu caso.")
+    else:
+        quien = []
+        if any(_issue_owner(i).startswith("Marketing") for i in issues):
+            quien.append("lo de GTM/plataformas lo puede aplicar marketing")
+        if any("Desarrollador" in _issue_owner(i) for i in issues):
+            quien.append("lo marcado como 'Desarrollador web' requiere tocar código")
+        paras.append(
+            "Qué hacer: sigue el plan de acción de abajo en orden — el bloque "
+            "'Urgente' corta la pérdida de datos hoy mismo"
+            + ("; " + " y ".join(quien) if quien else "") +
+            ". Este informe en PDF está redactado para reenviárselo tal cual a "
+            "quien gestione la web o el GTM.")
+    return paras
+
+
+def build_action_plan(issues, score, det=None, scan=None):
     """Conclusión ejecutiva + plan de acción priorizado a partir de los problemas."""
     reales = [i for i in issues if i["severity"] != "info"]
     n_crit = sum(1 for i in reales if i["severity"] == "critico")
     n_alto = sum(1 for i in reales if i["severity"] == "alto")
-    n_medio = sum(1 for i in reales if i["severity"] == "medio")
 
-    # Veredicto
+    # Veredicto breve (titular)
     if not reales:
-        veredicto = ("La medición de esta página está sana: las plataformas cargan, "
-                     "los eventos se envían y no se detectó ningún problema que "
-                     "requiera acción. Solo hay observaciones informativas.")
+        veredicto = "La medición de esta página está sana. ✅"
         nivel = "ok"
     else:
         peor = reales[0]  # ya vienen ordenados por severidad
         if n_crit:
-            veredicto = (f"La medición tiene {n_crit} problema(s) CRÍTICO(S) que la "
-                         f"dejan inservible en parte o del todo. El más grave: "
-                         f"«{peor['title']}». Hasta corregirlo, los datos de esta "
-                         "página no son fiables y las campañas no pueden optimizar.")
+            veredicto = (f"La medición tiene {n_crit} problema(s) CRÍTICO(S). El más "
+                         f"grave: «{peor['title']}». Hasta corregirlo, los datos de "
+                         "esta página no son fiables.")
             nivel = "critico"
         elif n_alto:
-            veredicto = (f"La base de medición funciona, pero hay {n_alto} problema(s) "
-                         f"grave(s) que están dañando la calidad del dato — el principal: "
-                         f"«{peor['title']}». Conviene corregirlos esta semana; cada día "
-                         "que pasan activos se pierden conversiones o se ensucian métricas.")
+            veredicto = (f"La base funciona, pero hay {n_alto} problema(s) grave(s) "
+                         f"dañando el dato — el principal: «{peor['title']}».")
             nivel = "grave"
         else:
-            veredicto = (f"La medición funciona correctamente en lo esencial. Hay "
-                         f"{len(reales)} ajuste(s) de calidad recomendados que "
-                         "mejorarán la fiabilidad y la atribución, sin urgencia crítica.")
+            veredicto = (f"La medición funciona en lo esencial; hay {len(reales)} "
+                         "ajuste(s) de calidad recomendados.")
             nivel = "mejorable"
+
+    # Diagnóstico narrativo (si tenemos las detecciones a mano)
+    diagnostico = (_diagnosis_narrative(issues, det, scan, nivel)
+                   if det is not None and scan is not None else [])
 
     # Plan priorizado
     bloques = []
@@ -914,8 +1010,8 @@ def build_action_plan(issues, score):
 
     cierre = ("Tras aplicar cada bloque, vuelve a escanear la página para confirmar "
               "que el problema desaparece y que no se ha roto nada más.")
-    return {"veredicto": veredicto, "nivel": nivel, "bloques": bloques,
-            "cierre": cierre}
+    return {"veredicto": veredicto, "nivel": nivel, "diagnostico": diagnostico,
+            "bloques": bloques, "cierre": cierre}
 
 
 def health_score(issues):

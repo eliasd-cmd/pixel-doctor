@@ -56,13 +56,15 @@ def build_html_report(url, res):
                      + (" · banner aceptado durante el escaneo" if scan.get("consent_click") else "")
                      + "</div>")
 
-    # Conclusión y plan de acción
-    plan = build_action_plan(issues, score)
+    # Diagnóstico y plan de acción
+    plan = build_action_plan(issues, score, det, scan)
     nivel_color = {"ok": "#2e7d32", "mejorable": "#1565c0",
                    "grave": "#e65100", "critico": "#c62828"}[plan["nivel"]]
-    parts.append("<h2>🩺 Conclusión</h2>")
+    parts.append("<h2>🩺 Diagnóstico</h2>")
     parts.append(f"<div class='issue' style='border-left-color:{nivel_color}'>"
-                 f"<p>{_e(plan['veredicto'])}</p></div>")
+                 f"<p><strong>{_e(plan['veredicto'])}</strong></p>"
+                 + "".join(f"<p>{_e(p)}</p>" for p in plan["diagnostico"])
+                 + "</div>")
     if plan["bloques"]:
         parts.append("<h2>🗺️ Plan de acción priorizado</h2>")
         paso = 0

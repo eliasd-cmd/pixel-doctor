@@ -115,9 +115,11 @@ def build_markdown_report(url, res):
             lines.append(f"- **{d['name']}** — IDs: {', '.join(d['ids']) or '—'} · "
                          f"librería: {'✅' if d['library_loaded'] else '❌'} · "
                          f"eventos enviados: {len(d['events'])}")
-    plan = build_action_plan(issues, res["score"])
-    lines.append("## Conclusión\n")
+    plan = build_action_plan(issues, res["score"], det, scan)
+    lines.append("## Diagnóstico\n")
     lines.append(plan["veredicto"] + "\n")
+    for p in plan["diagnostico"]:
+        lines.append(p + "\n")
     if plan["bloques"]:
         lines.append("## Plan de acción priorizado\n")
         paso = 0
@@ -319,10 +321,12 @@ for tab, (url, res) in zip(tabs_urls, results.items()):
 
         # ------- problemas
         with t1:
-            plan = build_action_plan(issues, score)
-            st.subheader("🩺 Conclusión")
+            plan = build_action_plan(issues, score, det, scan)
+            st.subheader("🩺 Diagnóstico")
             {"ok": st.success, "mejorable": st.info,
              "grave": st.warning, "critico": st.error}[plan["nivel"]](plan["veredicto"])
+            for p in plan["diagnostico"]:
+                st.markdown(p)
             if plan["bloques"]:
                 st.subheader("🗺️ Plan de acción priorizado")
                 paso = 0
