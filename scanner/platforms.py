@@ -38,13 +38,17 @@ def _multipart(post_data):
 
 
 def _ev(platform, name, pid, req, params=None):
+    failure = req["failure"]
+    if failure and "ERR_ABORTED" in failure:
+        # El navegador descartó la respuesta, pero el hit salió: cuenta como OK
+        failure = None
     return {
         "platform": platform,
         "event": name or "(sin nombre)",
         "id": pid or "",
         "url": req["url"][:300],
         "status": req["status"],
-        "failure": req["failure"],
+        "failure": failure,
         "phase": req.get("phase", ""),
         "ts": req.get("ts"),
         "params": params or {},
@@ -174,7 +178,8 @@ ADS_HIT_RE = re.compile(
     r"(googleadservices\.com/pagead/conversion|"
     r"google\.com/pagead/1p-conversion|"
     r"googleads\.g\.doubleclick\.net/pagead/viewthroughconversion|"
-    r"google\.com/ccm/collect|"
+    r"google\.[a-z.]+/ccm/collect|"
+    r"[a-z0-9]+\.googlesyndication\.com/ccm/collect|"
     r"google\.[a-z.]+/pagead/1p-user-list)")
 
 
@@ -530,6 +535,11 @@ def tracking_failures(scan):
         if not any(h in r["url"] for h in TRACK_HOSTS):
             continue
         if r.get("failure"):
+            # ERR_ABORTED no es un bloqueo: es el navegador cancelando una
+            # petición duplicada o una pata de redirección (el hit suele llegar
+            # por otra vía). Solo cuentan los fallos reales.
+            if "ERR_ABORTED" in (r["failure"] or ""):
+                continue
             bad.append({**r, "problema": f"Petición fallida: {r['failure']}"})
         elif r.get("status") and r["status"] >= 400:
             bad.append({**r, "problema": f"HTTP {r['status']}"})
