@@ -581,6 +581,117 @@ def run_rules(scan, det):
     q_issues, _ = quality_rules(scan, det)
     issues.extend(q_issues)
 
+    # -------- ¿Aceptar el banner concede TAMBIÉN el consentimiento de ads? --
+    # gcs=G1[ads][analytics]: posición 2 = ad_storage, posición 3 = analytics.
+    if consent_mode and scan.get("consent_click"):
+        gcs_post = [e["params"]["gcs"] for k in ("ga4", "gads")
+                    for e in det[k]["events"]
+                    if e.get("phase") in ("post_consent", "post_submit", "revisit")
+                    and e["params"].get("gcs", "").startswith("G1")
+                    and len(e["params"]["gcs"]) >= 4]
+        if gcs_post and all(g[2] == "0" for g in gcs_post):
+            issues.append(issue(
+                "alto", "consentimiento",
+                "Aceptar el banner NO concede el consentimiento de PUBLICIDAD (ad_storage)",
+                "Tras aceptar todas las cookies, los hits siguen saliendo con "
+                f"ad_storage denegado (gcs={gcs_post[0]}). La analítica funciona, pero "
+                "para Google Ads es como si TODOS los usuarios rechazaran: no se crea "
+                "_gcl_au, las conversiones no se atribuyen al clic y el remarketing "
+                "no construye audiencias — aunque el usuario haya dicho que sí.",
+                ["En el CMP (Usercentrics: Configuración → Google Consent Mode), "
+                 "verifica que la categoría de Marketing/Publicidad está mapeada a "
+                 "`ad_storage`, `ad_user_data` y `ad_personalization` — no solo a "
+                 "analytics_storage.",
+                 "Comprueba que los servicios de Google Ads/Marketing existen en la "
+                 "configuración del CMP y están dentro de esa categoría.",
+                 "Valida con GTM Vista previa → pestaña Consent: tras aceptar, "
+                 "ad_storage debe pasar a Granted (y el gcs de los hits a G111).",
+                 "Este fallo suele explicar también la ausencia de _gcl_au aunque "
+                 "el Conversion Linker esté instalado."],
+                f"gcs tras aceptar: {gcs_post[0]} (esperado G111)"))
+
+    # ---------------------------- Persistencia del consentimiento (2ª visita)
+    rv = scan.get("revisit") or {}
+    if rv.get("done"):
+        def _pos_state(gcs_list, i):
+            vals = [g[i] for g in gcs_list
+                    if g.startswith("G1") and len(g) >= 4]
+            if not vals:
+                return None
+            return "1" if any(v == "1" for v in vals) else "0"
+
+        post_gcs = [e["params"].get("gcs", "") for k in ("ga4", "gads")
+                    for e in det[k]["events"] if e.get("phase") == "post_consent"]
+        rev_gcs = [e["params"].get("gcs", "") for k in ("ga4", "gads")
+                   for e in det[k]["events"] if e.get("phase") == "revisit"]
+        degradados = []
+        for i, nombre in ((2, "publicidad (ad_storage)"),
+                          (3, "analítica (analytics_storage)")):
+            if _pos_state(post_gcs, i) == "1" and _pos_state(rev_gcs, i) == "0":
+                degradados.append(nombre)
+        if degradados:
+            issues.append(issue(
+                "critico", "consentimiento",
+                f"El consentimiento se DEGRADA al volver: se pierde {', '.join(degradados)}",
+                "En la primera visita, tras aceptar, el consentimiento estaba concedido; "
+                "al volver (mismo navegador, sin banner) los hits salen denegados. Los "
+                "usuarios que regresan a convertir son invisibles para esas plataformas.",
+                ["El CMP no reaplica la decisión guardada en cada carga: activa la "
+                 "integración nativa de Google Consent Mode del CMP.",
+                 "Si la actualización va por GTM, dispara con el evento que el CMP "
+                 "emite en CADA página con el estado guardado, no solo con el clic.",
+                 "Verifica el almacenamiento de la decisión (dominio de la cookie, "
+                 "localStorage) y su caducidad."],
+                f"gcs 1ª visita: {post_gcs[:1]} → 2ª visita: {rev_gcs[:1]}"))
+        rv_hits = [e for k in det for e in det[k]["events"]
+                   if e.get("phase") == "revisit"
+                   and not e["event"].startswith(("ping", "config"))]
+        rv_ga4 = [e for e in det["ga4"]["events"] if e.get("phase") == "revisit"]
+        rv_denied = _consent_denied_ga(rv_ga4)
+        first_hits = [e for k in det for e in det[k]["events"]
+                      if e.get("phase") == "post_consent"
+                      and not e["event"].startswith(("ping", "config"))]
+        persist_ko = (not rv.get("banner_shown")) and first_hits and (
+            not rv_hits or (rv_ga4 and rv_denied and
+                            len(rv_denied) == len([e for e in rv_ga4
+                                                   if "gcs" in e["params"]])))
+        if persist_ko:
+            issues.append(issue(
+                "critico", "consentimiento",
+                "El consentimiento ACEPTADO no persiste en la segunda visita",
+                "Tras aceptar las cookies, salir y volver a entrar (mismo navegador), "
+                "el banner ya no aparece pero las etiquetas cargan DENEGADAS. Todo "
+                "usuario que acepte, se vaya y vuelva a convertir después —el "
+                "recorrido más común desde móvil— es invisible para la medición.",
+                ["Causa típica: la actualización de Consent Mode solo se ejecuta al "
+                 "hacer CLIC en el banner; en visitas posteriores nadie la relanza y "
+                 "el estado por defecto ('denied') se queda para siempre.",
+                 "Arreglo en el CMP: activa la integración NATIVA de Google Consent "
+                 "Mode (en Usercentrics: Configuración → Google Consent Mode), que "
+                 "reaplica la decisión guardada en cada carga de página.",
+                 "Si lo gestionas por GTM: dispara la actualización con el evento que "
+                 "el CMP empuja en CADA página con el estado guardado (no solo con el "
+                 "evento del clic de aceptar).",
+                 "Comprueba también dónde se guarda la decisión: si el usuario aceptó "
+                 "en otro subdominio (www vs cloud), el consentimiento no se comparte "
+                 "salvo que actives el cross-domain consent del CMP.",
+                 "Verifícalo tal cual lo hace este escáner: acepta en incógnito, cierra "
+                 "la pestaña, vuelve a entrar y mira en GTM Preview → Consent si el "
+                 "estado es Granted en la segunda visita.",
+                 "Red de seguridad: configura el CMP para volver a mostrar el banner "
+                 "cuando no encuentre una decisión válida guardada."],
+                f"2ª visita: banner={rv.get('banner_shown')}, hits de plataformas="
+                f"{len(rv_hits)}, GA4 denegados={len(rv_denied)}/{len(rv_ga4)}"))
+        elif rv.get("banner_shown"):
+            issues.append(issue(
+                "info", "consentimiento",
+                "El banner vuelve a aparecer en la segunda visita",
+                "El CMP no guarda la aceptación y vuelve a preguntar en cada visita. "
+                "No se pierde medición (quien re-acepta vuelve a medirse), pero es "
+                "mala experiencia y baja la tasa de aceptación.",
+                ["Revisa la caducidad/almacenamiento de la decisión en el CMP "
+                 "(cookie propia, localStorage) y que no se borre entre páginas."]))
+
     # Comparativa pre/post consentimiento
     if consent_mode and scan.get("consent_click"):
         post_hits = [e for k in det for e in det[k]["events"]
@@ -962,6 +1073,10 @@ def _diagnosis_narrative(issues, det, scan, nivel):
     if "redirección ELIMINA" in titles.lower() or "ELIMINA parámetros" in titles:
         extras.append("una redirección está borrando los parámetros de campaña "
                       "por el camino")
+    if "no persiste en la segunda visita" in titles:
+        extras.append("el consentimiento aceptado NO se conserva cuando el usuario "
+                      "vuelve: los que regresan a convertir (el recorrido típico "
+                      "desde móvil) son invisibles")
     if "PII en claro" in titles:
         extras.append("se están enviando datos personales en claro a las "
                       "plataformas (riesgo RGPD y de que Google borre la "

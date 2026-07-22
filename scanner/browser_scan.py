@@ -312,6 +312,8 @@ def scan(url, wait_ms=6000, consent=False, interact=False, mobile=False,
                     "test_email": test_email if submit_form else None},
         "lead_test": None,
         "js_pre_submit": None,
+        "revisit": None,
+        "js_revisit": None,
         "requests": [],
         "console": [],
         "page_errors": [],
@@ -547,6 +549,38 @@ def scan(url, wait_ms=6000, consent=False, interact=False, mobile=False,
         if result["bot_blocked"]:
             log("[aviso] El sitio parece haber servido una página anti-bot: "
                 "los resultados no son representativos")
+
+        # Segunda visita: ¿persiste el consentimiento aceptado? Simula al
+        # usuario que aceptó, se fue y vuelve más tarde con el mismo navegador.
+        if consent and result.get("consent_click") and not result["bot_blocked"]:
+            log("[info] Segunda visita: comprobando que el consentimiento persiste…")
+            phase["value"] = "revisit"
+            rv = {"done": False, "banner_shown": None, "error": None}
+            try:
+                page.goto(url, wait_until="load", timeout=timeout_ms)
+                try:
+                    page.wait_for_load_state("networkidle", timeout=6000)
+                except PWTimeout:
+                    pass
+                page.wait_for_timeout(max(3000, wait_ms // 2))
+                rv["done"] = True
+                shown = False
+                for sel in CONSENT_SELECTORS:
+                    try:
+                        if page.locator(sel).first.is_visible(timeout=200):
+                            shown = True
+                            break
+                    except Exception:
+                        continue
+                rv["banner_shown"] = shown
+                try:
+                    result["js_revisit"] = page.evaluate(JS_SNAPSHOT)
+                except Exception:
+                    pass
+                log(f"[info] Segunda visita: banner de nuevo={shown}")
+            except Exception as e:
+                rv["error"] = str(e)[:200]
+            result["revisit"] = rv
 
         browser.close()
 

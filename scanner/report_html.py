@@ -191,7 +191,8 @@ def build_html_report(url, res):
                      "<th>ID</th><th>HTTP</th><th>Fase</th></tr>")
         fase_lbl = {"pre_consent": "antes de aceptar cookies",
                     "post_consent": "tras aceptar cookies",
-                    "post_submit": "tras enviar formulario", "load": "carga"}
+                    "post_submit": "tras enviar formulario",
+                    "revisit": "segunda visita", "load": "carga"}
         for e in evs:
             parts.append(f"<tr><td>{_e(e['ts'])}s</td><td>{_e(e['platform'])}</td>"
                          f"<td>{_e(e['event'])}</td><td>{_e(e['id'])}</td>"

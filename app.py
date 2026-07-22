@@ -529,7 +529,7 @@ for tab, (url, res) in zip(tabs_urls, results.items()):
                     "⏱️ s": e["ts"], "Plataforma": e["platform"], "Evento": e["event"],
                     "ID": e["id"], "HTTP": e["failure"] or e["status"],
                     "Fase": {"pre_consent": "🔒 pre-consent", "post_consent": "🍪 post-consent",
-                             "post_submit": "🧪 post-envío",
+                             "post_submit": "🧪 post-envío", "revisit": "🔄 2ª visita",
                              "load": "carga"}.get(e["phase"], e["phase"]),
                     "Parámetros": ", ".join(f"{k}={v}" for k, v in list(e["params"].items())[:6]),
                 } for e in evs])
