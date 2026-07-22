@@ -57,6 +57,29 @@ CONSENT_SELECTORS = [
 
 CONSENT_TEXT_RE = r"(?i)^(aceptar( todo| todas)?( las cookies)?|accept( all)?( cookies)?|permitir todas|agree|estoy de acuerdo|entendido|allow all|acepto)$"
 
+# Respaldo: APIs JS oficiales de los CMP para aceptar todo cuando el banner no
+# está visible o no se encuentra el botón (p. ej. Usercentrics sin UI).
+CONSENT_JS_APIS = """
+async () => {
+  try { if (window.UC_UI && UC_UI.acceptAllConsents) {
+    await UC_UI.acceptAllConsents();
+    try { UC_UI.closeCMP && UC_UI.closeCMP(); } catch (e) {}
+    return 'API Usercentrics'; } } catch (e) {}
+  try { if (window.OneTrust && OneTrust.AllowAll) {
+    OneTrust.AllowAll(); return 'API OneTrust'; } } catch (e) {}
+  try { if (window.Cookiebot && Cookiebot.submitCustomConsent) {
+    Cookiebot.submitCustomConsent(true, true, true); return 'API Cookiebot'; } } catch (e) {}
+  try { if (window.Didomi && Didomi.setUserAgreeToAll) {
+    Didomi.setUserAgreeToAll(); return 'API Didomi'; } } catch (e) {}
+  try { if (typeof cmplz_accept_all === 'function') {
+    cmplz_accept_all(); return 'API Complianz'; } } catch (e) {}
+  try { if (window.__tcfapi && window.OptanonWrapper === undefined &&
+            window.CookieScript && CookieScript.instance) {
+    CookieScript.instance.acceptAllAction(); return 'API CookieScript'; } } catch (e) {}
+  return null;
+}
+"""
+
 # Simulación de llegada de campaña (--attribution): por plataforma, con el
 # click-ID y las UTM que esa plataforma usaría de verdad. Permite verificar que
 # los click-IDs sobreviven a redirecciones, generan su cookie y llegan en los hits.
@@ -282,13 +305,21 @@ def scan(url, wait_ms=6000, consent=False, interact=False, mobile=False,
     t0 = time.monotonic()
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
+        browser = p.chromium.launch(
+            headless=True,
+            args=["--disable-blink-features=AutomationControlled"])
         context = browser.new_context(
             user_agent=MOBILE_UA if mobile else DESKTOP_UA,
             viewport={"width": 390, "height": 844} if mobile else {"width": 1440, "height": 900},
             locale="es-ES",
             timezone_id="Europe/Madrid",
         )
+        # Reducir señales de automatización (algunos anti-bot bloquean headless)
+        try:
+            context.add_init_script(
+                "Object.defineProperty(navigator, 'webdriver', {get: () => undefined});")
+        except Exception:
+            pass
         page = context.new_page()
 
         req_index = {}
@@ -402,6 +433,15 @@ def scan(url, wait_ms=6000, consent=False, interact=False, mobile=False,
                         clicked = "texto: botón aceptar"
                 except Exception:
                     pass
+            if not clicked:
+                # Respaldo: API JS del CMP (funciona aunque el banner no se vea)
+                try:
+                    phase["value"] = "post_consent"
+                    api = page.evaluate(CONSENT_JS_APIS)
+                except Exception:
+                    api = None
+                if api:
+                    clicked = api
             result["consent_click"] = clicked
             if clicked:
                 log(f"[info] Consentimiento aceptado vía {clicked}")
@@ -441,6 +481,28 @@ def scan(url, wait_ms=6000, consent=False, interact=False, mobile=False,
             result["html"] = page.content()[:MAX_HTML]
         except Exception:
             pass
+
+        # ¿El sitio sirvió una página de verificación anti-bot en vez del
+        # contenido real? Si es así, los resultados NO son representativos.
+        try:
+            title = (page.title() or "").lower()
+        except Exception:
+            title = ""
+        html_low = (result["html"] or "").lower()
+        block_title = any(s in title for s in (
+            "just a moment", "attention required", "access denied",
+            "un momento", "verificando", "verification required", "bot verification"))
+        block_html = any(s in html_low for s in (
+            "cf-chl", "challenge-platform", "cf_chl_opt", "turnstile",
+            "captcha-delivery.com", "geo.captcha-delivery", "datadome",
+            "px-captcha", "perimeterx", "_incapsula_", "imperva",
+            "verify you are human", "confirme que es una persona"))
+        status_block = (result.get("navigation", {}).get("status") or 0) in (403, 429, 503)
+        result["bot_blocked"] = bool(block_title or block_html or
+                                     (status_block and len(html_low) < 30000))
+        if result["bot_blocked"]:
+            log("[aviso] El sitio parece haber servido una página anti-bot: "
+                "los resultados no son representativos")
 
         browser.close()
 

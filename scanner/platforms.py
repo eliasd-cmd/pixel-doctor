@@ -56,7 +56,8 @@ def _ev(platform, name, pid, req, params=None):
 # /g/collect en cualquier dominio: cubre google-analytics.com, regiones UE
 # (region1.google-analytics.com) y GTM server-side en dominio propio.
 GA4_HIT_RE = re.compile(r"/g/collect\?")
-GA4_LIB_RE = re.compile(r"googletagmanager\.com/gtag/js\?.*\bid=(G-[A-Z0-9]+)")
+# gtag.js en cualquier dominio (googletagmanager.com o servido first-party)
+GA4_LIB_RE = re.compile(r"/gtag/js\?[^\"']*\bid=(G-[A-Z0-9]+)")
 
 
 def detect_ga4(requests, html, js):
@@ -101,6 +102,14 @@ def detect_ga4(requests, html, js):
     for m in re.finditer(r"\bG-[A-Z0-9]{6,}\b", html or ""):
         d["ids"].add(m.group(0))
         d["in_html"] = True
+    # Ejecución confirmada por JS aunque la librería se sirva first-party
+    g = ((js or {}).get("globals") or {})
+    for k in (g.get("google_tag_manager") or []):
+        if k.startswith("G-"):
+            d["ids"].add(k)
+            d["library_loaded"] = True
+    if g.get("gtag") == "function" and g.get("google_tag_data_present"):
+        d["library_loaded"] = True
     d["server_side_hosts"] = sorted(d["server_side_hosts"])
     return d
 
@@ -132,21 +141,30 @@ def detect_ua(requests, html, js):
 def detect_gtm(requests, html, js):
     d = {"key": "gtm", "name": "Google Tag Manager", "ids": set(),
          "library_loaded": False, "in_html": False, "events": [],
-         "containers_loaded": []}
+         "containers_loaded": [], "first_party": False}
     for r in requests:
-        m = re.search(r"googletagmanager\.com/gtm\.js\?.*\bid=(GTM-[A-Z0-9]+)", r["url"])
+        # gtm.js en CUALQUIER dominio: cubre server-side GTM / custom loader /
+        # Google Tag Gateway que sirven el contenedor desde el dominio propio.
+        m = re.search(r"/gtm\.js\?[^\"']*\bid=(GTM-[A-Z0-9]+)", r["url"])
         if m:
             d["library_loaded"] = True
             d["ids"].add(m.group(1))
+            if "googletagmanager.com" not in r["url"]:
+                d["first_party"] = True
             if m.group(1) not in d["containers_loaded"]:
                 d["containers_loaded"].append(m.group(1))
     for m in re.finditer(r"\bGTM-[A-Z0-9]{4,}\b", html or ""):
         d["ids"].add(m.group(0))
         d["in_html"] = True
+    # Prueba definitiva de ejecución: window.google_tag_manager solo existe si
+    # el contenedor se cargó Y ejecutó (aunque se sirviera con URL ofuscada).
     gtm_keys = ((js or {}).get("globals") or {}).get("google_tag_manager") or []
     for k in gtm_keys:
         if k.startswith("GTM-"):
             d["ids"].add(k)
+            d["library_loaded"] = True
+            if k not in d["containers_loaded"]:
+                d["containers_loaded"].append(k)
     return d
 
 
@@ -164,7 +182,7 @@ def detect_gads(requests, html, js):
     d = {"key": "gads", "name": "Google Ads", "ids": set(),
          "library_loaded": False, "in_html": False, "events": []}
     for r in requests:
-        m = re.search(r"googletagmanager\.com/gtag/js\?.*\bid=(AW-[0-9]+)", r["url"])
+        m = re.search(r"/gtag/js\?[^\"']*\bid=(AW-[0-9]+)", r["url"])
         if m:
             d["library_loaded"] = True
             d["ids"].add(m.group(1))
@@ -186,6 +204,10 @@ def detect_gads(requests, html, js):
     for m in re.finditer(r"\bAW-\d{8,}\b", html or ""):
         d["ids"].add(m.group(0))
         d["in_html"] = True
+    for k in (((js or {}).get("globals") or {}).get("google_tag_manager") or []):
+        if k.startswith("AW-"):
+            d["ids"].add(k)
+            d["library_loaded"] = True
     return d
 
 
@@ -226,7 +248,7 @@ def detect_linkedin(requests, html, js):
     for r in requests:
         if "snap.licdn.com" in r["url"] and "insight" in r["url"]:
             d["library_loaded"] = True
-        if re.search(r"px\.ads\.linkedin\.com/(collect|attribution_trigger)", r["url"]):
+        if re.search(r"px\.ads\.linkedin\.com/", r["url"]):
             q = _q(r["url"])
             pid = q.get("pid", "")
             if pid:
@@ -250,13 +272,13 @@ def detect_tiktok(requests, html, js):
     d = {"key": "tiktok", "name": "TikTok Pixel", "ids": set(),
          "library_loaded": False, "in_html": False, "events": []}
     for r in requests:
-        m = re.search(r"analytics\.tiktok\.com/i18n/pixel/(?:events|sdk)[^?]*\?.*sdkid=([A-Z0-9]+)",
+        m = re.search(r"analytics[\w-]*\.tiktok\.com/i18n/pixel/(?:events|sdk)[^?]*\?.*sdkid=([A-Z0-9]+)",
                       r["url"], re.I)
-        if "analytics.tiktok.com/i18n/pixel" in r["url"]:
+        if re.search(r"analytics[\w-]*\.tiktok\.com/i18n/pixel", r["url"]):
             d["library_loaded"] = True
         if m:
             d["ids"].add(m.group(1))
-        if re.search(r"analytics\.tiktok\.com/api/v2/pixel", r["url"]):
+        if re.search(r"analytics[\w-]*\.tiktok\.com/api/v2/pixel", r["url"]):
             name, pid = "track", ""
             if r.get("post_data"):
                 try:
@@ -280,9 +302,9 @@ def detect_bing(requests, html, js):
     d = {"key": "bing", "name": "Microsoft Ads UET (Bing)", "ids": set(),
          "library_loaded": False, "in_html": False, "events": []}
     for r in requests:
-        if "bat.bing.com/bat.js" in r["url"] or "bat.bing.com/p/action" in r["url"]:
+        if re.search(r"bat\.bing\.(com|net)/(bat\.js|p/action)", r["url"]):
             d["library_loaded"] = True
-        m = re.search(r"bat\.bing\.com(?:/p)?/action/?\d*\?", r["url"])
+        m = re.search(r"bat\.bing\.(?:com|net)(?:/p)?/action/?\d*\?", r["url"])
         if m:
             q = _q(r["url"])
             ti = q.get("ti", "")

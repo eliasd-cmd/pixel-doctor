@@ -59,6 +59,23 @@ def run_rules(scan, det):
              "Prueba a abrirla en una ventana de incógnito de tu navegador."]))
         return issues, cmp_info
 
+    if scan.get("bot_blocked"):
+        issues.append(issue(
+            "critico", "general",
+            "⛔ El sitio BLOQUEÓ al escáner (protección anti-bot) — resultados NO representativos",
+            "El servidor detectó que el escáner es un navegador automatizado y le "
+            "sirvió una página de verificación en lugar del contenido real. Las "
+            "etiquetas y eventos del sitio probablemente SÍ existen, pero aquí no "
+            "se pueden ver. NO tomes decisiones con este informe.",
+            ["Verifica la medición manualmente con Tag Assistant / Meta Pixel Helper "
+             "en tu Chrome (tu navegador sí ve el sitio real).",
+             "Si controlas el WAF/CDN del sitio (Cloudflare, Akamai, DataDome…), "
+             "puedes crear una excepción temporal para escanear.",
+             "Alternativa: ejecuta Pixel Doctor en local (streamlit run app.py en tu "
+             "Mac) — desde una IP residencial el bloqueo suele desaparecer.",
+             "Los avisos de este informe quedan anulados por este bloqueo."]))
+        return issues, cmp_info
+
     if nav.get("status") and nav["status"] >= 400:
         issues.append(issue(
             "critico", "general", f"La página devuelve HTTP {nav['status']}",
@@ -870,6 +887,15 @@ def _diagnosis_narrative(issues, det, scan, nivel):
     de fondo y qué significa para las campañas."""
     paras = []
     titles = " | ".join(i["title"] for i in issues)
+
+    if "BLOQUEÓ al escáner" in titles:
+        return ["Este escaneo no es válido: el sitio detectó el navegador "
+                "automatizado y le sirvió una página de verificación en lugar del "
+                "contenido real. Las etiquetas probablemente SÍ existen — no tomes "
+                "ninguna decisión con este informe.",
+                "Qué hacer: verifica con Tag Assistant en tu Chrome, pide una "
+                "excepción en el WAF/CDN del sitio, o ejecuta Pixel Doctor en "
+                "local desde tu ordenador (IP residencial)."]
 
     if "No se detectó NINGÚN sistema" in titles:
         return ["Esta página no tiene ninguna medición instalada: ni Analytics ni "
