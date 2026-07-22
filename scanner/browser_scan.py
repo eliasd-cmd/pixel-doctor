@@ -184,12 +184,13 @@ def try_fill_and_submit(page, phase, email, name, phone):
             try:
                 if not f.is_visible():
                     continue
-                if f.locator("input[type='email'], input[name*='mail' i], "
-                             "input[id*='mail' i]").count() > 0:
+                if f.locator("input[type='email']:visible, input[name*='mail' i]:visible, "
+                             "input[id*='mail' i]:visible").count() > 0:
                     target = f
                     break
                 if fallback is None and \
-                        f.locator("input[type='text'], input[type='tel']").count() > 0:
+                        f.locator("input[type='text']:visible, "
+                                  "input[type='tel']:visible").count() > 0:
                     fallback = f
             except Exception:
                 continue
@@ -247,23 +248,46 @@ def try_fill_and_submit(page, phase, email, name, phone):
 
         # A partir de aquí, todo hit de red cuenta como "post_submit"
         phase["value"] = "post_submit"
+
+        def _nav_exc(e):
+            # Si la página navegó/recargó durante el clic, el envío FUNCIONÓ:
+            # la navegación es consecuencia del submit, no un fallo.
+            s = str(e)
+            return ("Execution context was destroyed" in s
+                    or "context or browser has been closed" in s
+                    or "frame was detached" in s
+                    or "Navigation" in s)
+
         try:
             target.locator("button[type='submit'], input[type='submit']").first \
-                  .click(timeout=3000)
+                  .click(timeout=4000)
             info["submitted"] = True
             info["submit_via"] = "botón submit"
-        except Exception:
-            try:
-                target.locator("button").first.click(timeout=2000)
+        except Exception as e1:
+            if _nav_exc(e1):
                 info["submitted"] = True
-                info["submit_via"] = "primer botón del formulario"
-            except Exception:
+                info["submit_via"] = "botón submit (la página navegó al enviar)"
+            else:
                 try:
-                    target.evaluate("f => f.requestSubmit ? f.requestSubmit() : f.submit()")
+                    target.locator("button").first.click(timeout=2000)
                     info["submitted"] = True
-                    info["submit_via"] = "form.submit()"
-                except Exception as e:
-                    info["error"] = f"No se pudo enviar: {str(e)[:200]}"
+                    info["submit_via"] = "primer botón del formulario"
+                except Exception as e2:
+                    if _nav_exc(e2):
+                        info["submitted"] = True
+                        info["submit_via"] = "botón (la página navegó al enviar)"
+                    else:
+                        try:
+                            target.evaluate(
+                                "f => f.requestSubmit ? f.requestSubmit() : f.submit()")
+                            info["submitted"] = True
+                            info["submit_via"] = "form.submit()"
+                        except Exception as e3:
+                            if _nav_exc(e3):
+                                info["submitted"] = True
+                                info["submit_via"] = "form.submit() (con navegación)"
+                            else:
+                                info["error"] = f"No se pudo enviar: {str(e3)[:200]}"
 
         if info["submitted"]:
             page.wait_for_timeout(6000)
@@ -463,6 +487,26 @@ def scan(url, wait_ms=6000, consent=False, interact=False, mobile=False,
             result["lead_test"] = try_fill_and_submit(
                 page, phase, test_email, test_name, test_phone)
             lt = result["lead_test"]
+            if lt["form_found"] and not lt["submitted"]:
+                # Respaldo por evidencia de red: si tras el intento salió un POST
+                # que no es de tracking, el formulario SÍ se envió aunque el clic
+                # reportara error (típico cuando la página recarga al enviar).
+                page.wait_for_timeout(3000)
+                _tracking_hints = ("google", "facebook", "doubleclick", "licdn",
+                                   "linkedin", "tiktok", "bing", "clarity",
+                                   "hotjar", "googlesyndication")
+                posts = [r for r in result["requests"]
+                         if r.get("phase") == "post_submit"
+                         and r["method"] == "POST"
+                         and not any(h in r["url"] for h in _tracking_hints)]
+                if posts:
+                    lt["submitted"] = True
+                    lt["submit_via"] = "envío confirmado por red (POST del formulario)"
+                    lt["error"] = None
+                    try:
+                        lt["url_after"] = page.url
+                    except Exception:
+                        pass
             log(f"[info] Prueba de lead: form={lt['form_found']} "
                 f"enviado={lt['submitted']} campos={len(lt['fields'])}")
 
