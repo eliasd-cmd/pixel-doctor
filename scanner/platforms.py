@@ -172,6 +172,27 @@ def detect_gtm(requests, html, js):
     return d
 
 
+# ----------------------------------------------- Etiqueta de Google (GT-) --
+
+def detect_google_tag(requests, html, js):
+    """La "Etiqueta de Google" unificada (GT-XXXX) que agrupa destinos G-/AW-."""
+    d = {"key": "gtag_base", "name": "Etiqueta de Google (GT-)", "ids": set(),
+         "library_loaded": False, "in_html": False, "events": []}
+    for r in requests:
+        m = re.search(r"/gtag/js\?[^\"']*\bid=(GT-[A-Z0-9]+)", r["url"])
+        if m:
+            d["library_loaded"] = True
+            d["ids"].add(m.group(1))
+    for m in re.finditer(r"\bGT-[A-Z0-9]{5,}\b", html or ""):
+        d["ids"].add(m.group(0))
+        d["in_html"] = True
+    for k in (((js or {}).get("globals") or {}).get("google_tag_manager") or []):
+        if k.startswith("GT-"):
+            d["ids"].add(k)
+            d["library_loaded"] = True
+    return d
+
+
 # ---------------------------------------------------------- Google Ads ----
 
 ADS_HIT_RE = re.compile(
@@ -426,11 +447,22 @@ def detect_hubspot(requests, html, js):
 
 
 DETECTORS = [
-    detect_gtm, detect_ga4, detect_gads, detect_ua, detect_meta,
-    detect_linkedin, detect_tiktok, detect_bing, detect_twitter,
+    detect_gtm, detect_google_tag, detect_ga4, detect_gads, detect_ua,
+    detect_meta, detect_linkedin, detect_tiktok, detect_bing, detect_twitter,
     detect_pinterest, detect_snapchat, detect_hotjar, detect_clarity,
     detect_hubspot,
 ]
+
+
+def tag_inventory(det):
+    """Lista plana 'etiqueta → ID' (como los inspectores de tags de Chrome)."""
+    rows = []
+    for d in det.values():
+        if not d["detected"]:
+            continue
+        for tid in d["ids"] or ["(sin ID visible)"]:
+            rows.append({"plataforma": d["name"], "key": d["key"], "id": tid})
+    return rows
 
 # Plataformas de ads/analytics "principales" para el resumen
 CORE_PLATFORMS = ["gtm", "ga4", "gads", "meta", "linkedin", "tiktok", "bing"]

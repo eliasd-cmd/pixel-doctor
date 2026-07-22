@@ -2,7 +2,7 @@
 
 import html as _html
 
-from .platforms import all_events, conversion_events
+from .platforms import all_events, conversion_events, tag_inventory
 from .rules import SEVERITY_LABEL, score_label, attribution_audit, build_action_plan
 from .quality import build_inventory, essential_coverage
 
@@ -78,6 +78,16 @@ def build_html_report(url, res):
                     parts.append(f"<li>{_e(s)}</li>")
                 parts.append("</ol>")
         parts.append(f"<p><em>{_e(plan['cierre'])}</em></p>")
+
+    # Etiquetas y sus IDs (vista rápida)
+    inv_tags = tag_inventory(det)
+    if inv_tags:
+        parts.append("<h2>🏷️ Etiquetas detectadas y sus IDs</h2>")
+        parts.append("<table><tr><th>Etiqueta</th><th>ID</th></tr>")
+        for r in inv_tags:
+            parts.append(f"<tr><td>{_e(r['plataforma'])}</td>"
+                         f"<td style='font-family:monospace'>{_e(r['id'])}</td></tr>")
+        parts.append("</table>")
 
     # Plataformas
     parts.append("<h2>Plataformas detectadas</h2>")

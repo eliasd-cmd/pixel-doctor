@@ -20,7 +20,7 @@ import streamlit as st
 
 sys.path.insert(0, str(Path(__file__).parent))
 from scanner.platforms import (detect_all, all_events, tracking_failures,
-                               CORE_PLATFORMS, conversion_events)
+                               CORE_PLATFORMS, conversion_events, tag_inventory)
 from scanner.rules import run_rules, health_score, score_label, SEVERITY_LABEL
 from scanner.report_html import build_html_report
 from scanner.rules import attribution_audit, build_action_plan
@@ -51,7 +51,7 @@ PLATFORM_ICONS = {
     "linkedin": "💼", "tiktok": "🎵", "bing": "🟩", "twitter": "✖️",
     "pinterest": "📌", "snapchat": "👻", "hotjar": "🔥", "clarity": "🔍",
     "hubspot": "🧡", "general": "⚙️", "consentimiento": "🍪", "lead": "🧪",
-    "atribucion": "🎯", "plan": "📋",
+    "atribucion": "🎯", "plan": "📋", "gtag_base": "🔷",
 }
 
 
@@ -493,6 +493,16 @@ for tab, (url, res) in zip(tabs_urls, results.items()):
 
         # ------- plataformas
         with t2:
+            st.markdown("**🏷️ Etiquetas detectadas y sus IDs:**")
+            inv_tags = tag_inventory(det)
+            if inv_tags:
+                st.dataframe(pd.DataFrame([{
+                    "Etiqueta": f"{PLATFORM_ICONS.get(r['key'], '')} {r['plataforma']}",
+                    "ID": r["id"],
+                } for r in inv_tags]), use_container_width=True, hide_index=True)
+            else:
+                st.warning("No se detectó ninguna etiqueta.")
+            st.markdown("**Detalle por plataforma:**")
             rows = []
             for d in det.values():
                 rows.append({

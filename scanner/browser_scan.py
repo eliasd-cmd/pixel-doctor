@@ -149,7 +149,7 @@ JS_SNAPSHOT = """
       snaptr: t(window.snaptr),
       _linkedin_data_partner_ids: window._linkedin_data_partner_ids || null,
       google_tag_manager: window.google_tag_manager
-        ? Object.keys(window.google_tag_manager).filter(k => /^(GTM|G|AW|DC)-/.test(k))
+        ? Object.keys(window.google_tag_manager).filter(k => /^(GTM|GT|G|AW|DC)-/.test(k))
         : null,
       google_tag_data_present: window.google_tag_data !== undefined,
       __tcfapi: t(window.__tcfapi),
