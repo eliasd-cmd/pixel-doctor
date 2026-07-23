@@ -72,6 +72,7 @@ python -m scanner.browser_scan https://ejemplo.com --consent --json resultado.js
 |---|---|
 | **Repositorio** | `WeRise-ESP/pixel-doctor` (rama `main`) |
 | **Plataforma** | **Railway** (build por `Dockerfile`) |
+| **App en producción** | https://pixel-doctor-production.up.railway.app (puerto 8080) |
 | **Config** | `railway.json` — builder `DOCKERFILE`, reinicio `ON_FAILURE` (máx. 3) |
 
 **Actualizar = `git push` a `main`.** Railway reconstruye y redespliega solo.
