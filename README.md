@@ -66,9 +66,22 @@ python -m scanner.browser_scan https://ejemplo.com --consent --json resultado.js
 - El escáner se ejecuta sin adblock: si un hit falla aquí, el problema es de la
   propia web (CSP, CMP o implementación), no del navegador del visitante.
 
-## Despliegue en Streamlit Cloud (opcional)
+## Despliegue
 
-Playwright necesita Chromium instalado en el servidor. En Streamlit Cloud crea
-un `packages.txt` con las dependencias del sistema y ejecuta
-`playwright install chromium` en el arranque (o usa `st.cache_resource` con un
-`subprocess`). Diseñada principalmente para uso local.
+| | |
+|---|---|
+| **Repositorio** | `WeRise-ESP/pixel-doctor` (rama `main`) |
+| **Plataforma** | **Railway** (build por `Dockerfile`) |
+| **Config** | `railway.json` — builder `DOCKERFILE`, reinicio `ON_FAILURE` (máx. 3) |
+
+**Actualizar = `git push` a `main`.** Railway reconstruye y redespliega solo.
+El build tarda: instala Chromium y las dependencias de sistema de Playwright.
+
+Se usa Docker precisamente por eso — Playwright necesita un **navegador Chromium
+real** con sus librerías de sistema, algo que un despliegue Python plano no cubre.
+
+### Alternativa: Streamlit Cloud
+Es posible pero incómodo: hay que crear un `packages.txt` con las dependencias
+del sistema y ejecutar `playwright install chromium` en el arranque (p. ej. con
+`st.cache_resource` + `subprocess`). El contenedor Docker de Railway lo resuelve
+mejor.
